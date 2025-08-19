@@ -3,10 +3,23 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+*.spec
 
 # Logs
 logs/
 *.log
+log_*.txt
 
 # IDE / OS files
 .vscode/

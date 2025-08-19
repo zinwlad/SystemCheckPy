@@ -20,11 +20,33 @@ Windows system diagnostic tool with GUI (PyQt5) and CLI.
 pip install -r requirements.txt
 ```
 
+## Build (EXE)
+You can build a standalone Windows executable in several ways:
+
+- Using Python build script (recommended):
+  ```
+  python build.py --clean        # optional cleanup
+  python build.py                # produces dist/SystemCheckPy.exe
+  ```
+  Options: `--console` (console app), `--name MyApp`, `--target main.py`.
+
+- Using PowerShell script:
+  ```
+  powershell -ExecutionPolicy Bypass -File .\\build.ps1
+  ```
+
+- GitHub Actions (CI):
+  - On push to `main`, workflow in `.github/workflows/build.yml` builds EXE.
+  - Download artifact from the latest Actions run.
+
 ## Run (GUI)
 ```
 python main.py
 ```
 If a command requires admin rights, the app will offer to restart elevated.
+
+## Run (EXE)
+- After building, run `dist/SystemCheckPy.exe`.
 
 ## Run (CLI)
 ```
@@ -35,6 +57,8 @@ python SystemCheckPy.py
 - Stored in `logs/log_YYYYMMDD.txt`
 - Daily rotation, keep 7 days
 - Encoding cp1251 (better for Russian Windows)
+
+Note: logs are ignored by Git (.gitignore).
 
 ## Settings
 - Stored via QSettings under `SystemCheckPy/SystemCheckPyApp`
