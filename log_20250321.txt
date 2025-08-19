@@ -1,0 +1,213 @@
+2025-03-21 23:43:17,786 - INFO - Command: Get IP Configuration
+Result: InterfaceAlias       : Ethernet
+InterfaceIndex       : 11
+InterfaceDescription : Realtek(R) PCI(e) Ethernet Controller
+NetProfile.Name      : ALHN-26BE-5
+IPv4Address          : 192.168.1.76
+IPv6DefaultGateway   : 
+IPv4DefaultGateway   : 192.168.1.1
+DNSServer            : 192.168.1.1
+
+InterfaceAlias       : Беспроводная сеть
+InterfaceIndex       : 8
+InterfaceDescription : Realtek 8852BE Wireless LAN WiFi 6 PCI-E NIC
+NetAdapter.Status    : Disconnected
+
+InterfaceAlias       : Сетевое подключение Bluetooth
+InterfaceIndex       : 3
+InterfaceDescription : Bluetooth Device (Personal Area Network)
+NetAdapter.Status    : Disconnected
+2025-03-21 23:48:30,719 - INFO - Command: Get IP Configuration
+Result: InterfaceAlias       : Ethernet
+InterfaceIndex       : 11
+InterfaceDescription : Realtek(R) PCI(e) Ethernet Controller
+NetProfile.Name      : ALHN-26BE-5
+IPv4Address          : 192.168.1.76
+IPv6DefaultGateway   : 
+IPv4DefaultGateway   : 192.168.1.1
+DNSServer            : 192.168.1.1
+
+InterfaceAlias       : Беспроводная сеть
+InterfaceIndex       : 8
+InterfaceDescription : Realtek 8852BE Wireless LAN WiFi 6 PCI-E NIC
+NetAdapter.Status    : Disconnected
+
+InterfaceAlias       : Сетевое подключение Bluetooth
+InterfaceIndex       : 3
+InterfaceDescription : Bluetooth Device (Personal Area Network)
+NetAdapter.Status    : Disconnected
+2025-03-21 23:53:52,835 - INFO - Command: Get IP Configuration
+Result: InterfaceAlias       : Ethernet
+InterfaceIndex       : 11
+InterfaceDescription : Realtek(R) PCI(e) Ethernet Controller
+NetProfile.Name      : ALHN-26BE-5
+IPv4Address          : 192.168.1.76
+IPv6DefaultGateway   : 
+IPv4DefaultGateway   : 192.168.1.1
+DNSServer            : 192.168.1.1
+
+InterfaceAlias       : Беспроводная сеть
+InterfaceIndex       : 8
+InterfaceDescription : Realtek 8852BE Wireless LAN WiFi 6 PCI-E NIC
+NetAdapter.Status    : Disconnected
+
+InterfaceAlias       : Сетевое подключение Bluetooth
+InterfaceIndex       : 3
+InterfaceDescription : Bluetooth Device (Personal Area Network)
+NetAdapter.Status    : Disconnected
+2025-03-21 23:55:40,284 - INFO - Command: ╧юыєўшЄ№ ёЄрЄшёЄшъє ёхЄш
+Result: Name               Count
+----               -----
+Listen, 0             26
+Bound, 0              20
+Established, 64932     7
+Established, 64962     1
+Established, 64963     1
+Established, 443       6
+TimeWait, 55374        1
+TimeWait, 54848        1
+TimeWait, 55219        1
+TimeWait, 55330        1
+TimeWait, 55190        1
+TimeWait, 55301        1
+TimeWait, 55440        1
+TimeWait, 55437        1
+TimeWait, 55331        1
+TimeWait, 55132        1
+TimeWait, 54961        1
+TimeWait, 55276        1
+TimeWait, 54878        1
+TimeWait, 54992        1
+TimeWait, 55192        1
+Established, 55407     1
+TimeWait, 55372        1
+TimeWait, 55380        1
+TimeWait, 55134        1
+TimeWait, 55379        1
+TimeWait, 55022        1
+TimeWait, 55136        1
+TimeWait, 54933        1
+TimeWait, 55050        1
+TimeWait, 55079        1
+TimeWait, 55161        1
+TimeWait, 55105        1
+TimeWait, 55164        1
+TimeWait, 54768        1
+Established, 64991     1
+TimeWait, 55106        1
+TimeWait, 55077        1
+TimeWait, 55409        1
+Established, 50777     1
+TimeWait, 54964        1
+TimeWait, 54990        1
+TimeWait, 54769        1
+TimeWait, 55275        1
+TimeWait, 54907        1
+TimeWait, 55133        1
+TimeWait, 55439        1
+Established, 64937     1
+TimeWait, 55329        1
+TimeWait, 55188        1
+TimeWait, 55218        1
+TimeWait, 54879        1
+TimeWait, 55051        1
+TimeWait, 54935        1
+TimeWait, 55305        1
+TimeWait, 55076        1
+TimeWait, 55104        1
+TimeWait, 55373        1
+TimeWait, 55023        1
+TimeWait, 55273        1
+TimeWait, 55019        1
+TimeWait, 54904        1
+TimeWait, 54795        1
+TimeWait, 54932        1
+TimeWait, 55300        1
+TimeWait, 55411        1
+TimeWait, 55217        1
+TimeWait, 54851        1
+TimeWait, 54849        1
+Established, 50748     1
+TimeWait, 54797        1
+TimeWait, 55410        1
+TimeWait, 55191        1
+TimeWait, 54876        1
+TimeWait, 55465        1
+TimeWait, 54936        1
+TimeWait, 55303        1
+TimeWait, 54852        1
+TimeWait, 55412        1
+TimeWait, 54934        1
+TimeWait, 55302        1
+TimeWait, 54794        1
+TimeWait, 54822        1
+TimeWait, 55333        1
+TimeWait, 54712        1
+TimeWait, 55247        1
+TimeWait, 55108        1
+TimeWait, 55216        1
+TimeWait, 55135        1
+TimeWait, 55438        1
+TimeWait, 55272        1
+TimeWait, 54905        1
+TimeWait, 54965        1
+TimeWait, 55358        1
+TimeWait, 54908        1
+TimeWait, 55365        1
+TimeWait, 54989        1
+TimeWait, 55246        1
+TimeWait, 54962        1
+TimeWait, 55024        1
+TimeWait, 55332        1
+TimeWait, 55244        1
+TimeWait, 54991        1
+TimeWait, 55274        1
+TimeWait, 54767        1
+TimeWait, 55220        1
+TimeWait, 54850        1
+TimeWait, 55381        1
+Established, 52765     1
+TimeWait, 55377        1
+TimeWait, 55383        1
+TimeWait, 55304        1
+TimeWait, 54963        1
+TimeWait, 54960        1
+TimeWait, 54993        1
+TimeWait, 54821        1
+TimeWait, 55107        1
+TimeWait, 54906        1
+TimeWait, 54824        1
+TimeWait, 54823        1
+TimeWait, 55376        1
+TimeWait, 55080        1
+TimeWait, 55370        1
+TimeWait, 55162        1
+TimeWait, 55048        1
+TimeWait, 55189        1
+TimeWait, 55021        1
+TimeWait, 55371        1
+TimeWait, 54880        1
+TimeWait, 55248        1
+TimeWait, 55441        1
+TimeWait, 55382        1
+Established, 64990     1
+TimeWait, 55163        1
+TimeWait, 55052        1
+TimeWait, 54793        1
+TimeWait, 55413        1
+TimeWait, 54796        1
+TimeWait, 55408        1
+TimeWait, 55378        1
+TimeWait, 55245        1
+TimeWait, 55160        1
+TimeWait, 55078        1
+TimeWait, 55049        1
+TimeWait, 54877        1
+TimeWait, 443          3
+Established, 80        1
+Established, 5228      1
+TimeWait, 64932        1
+2025-03-21 23:55:51,431 - INFO - Command: ╧ЁютхЁшЄ№ єЁютхэ№ ёшуэрыр Wi-Fi
+Result: 
+2025-03-21 23:57:39,537 - INFO - Command: ╧ЁютхЁшЄ№ єЁютхэ№ ёшуэрыр Wi-Fi
+Result: 
