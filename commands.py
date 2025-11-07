@@ -1,5 +1,9 @@
 # commands.py
 commands = {
+    "Получить информацию о системе": {
+        "description": "Показывает общую информацию о системе: ОС, процессор, память и т.д.",
+        "command": "try { $os = Get-CimInstance -ClassName Win32_OperatingSystem; $cpu = Get-CimInstance -ClassName Win32_Processor; $comp = Get-CimInstance -ClassName Win32_ComputerSystem; $props = @{ 'Операционная система' = $os.Caption; 'Версия ОС' = $os.Version; 'Архитектура' = $os.OSArchitecture; 'Производитель' = $comp.Manufacturer; 'Модель' = $comp.Model; 'Имя компьютера' = $comp.Name; 'Пользователь' = $comp.UserName; 'Процессор' = $cpu.Name; 'Количество ядер' = $cpu.NumberOfCores; 'Логических процессоров' = $cpu.NumberOfLogicalProcessors; 'Объем ОЗУ (ГБ)' = [math]::Round($comp.TotalPhysicalMemory/1GB, 2); 'Время работы' = (Get-Date) - $os.LastBootUpTime }; $props | Format-List } catch { Write-Error \"Ошибка при получении информации о системе: $_\"; exit 1 }"
+    },
     "Получить конфигурацию IP": {
         "description": "Отображает полную конфигурацию сети, включая IP-адреса, DNS-серверы и шлюзы",
         "command": "Get-NetIPConfiguration | Format-List -Property *"
@@ -296,5 +300,145 @@ commands = {
         "input_prompt": "Введите точное имя службы (Name)",
         "input_pattern": "[A-Za-z0-9_.-]{2,64}",
         "input_example": "Spooler или wuauserv"
+    },
+    "Получить список запланированных задач (все)": {
+        "description": "Отображает все задачи в запланированном задании, включая отключенные",
+        "command": "Get-ScheduledTask | Format-Table -Property TaskName, State, TaskPath -AutoSize"
+    },
+    "Проверить время работы системы (подробно)": {
+        "description": "Показывает дату и время последней перезагрузки, а также общее время работы",
+        "command": "$os = Get-CimInstance Win32_OperatingSystem; $uptime = (Get-Date) - $os.LastBootUpTime; Write-Output \"Последняя перезагрузка: $($os.LastBootUpTime)\"; Write-Output \"Время работы: $($uptime.Days) дней, $($uptime.Hours) часов, $($uptime.Minutes) минут\""
+    },
+    "Проверить файлы с атрибутом 'System'": {
+        "description": "Находит файлы в корне системного диска с атрибутом 'System' (может быть полезно для диагностики)",
+        "command": "Get-ChildItem -Path C:\\ -Attributes System -ErrorAction SilentlyContinue | Format-Table -Property Name, LastWriteTime -AutoSize",
+        "requires_admin": True
+    },
+
+    # --- Сеть ---
+    "Проверить соединение (ping)": {
+        "description": "Выполнить ping до указанного хоста или IP",
+        "template": "ping \"{input}\" -n 4",
+        "input_prompt": "Введите хост или IP для проверки соединения",
+        "input_pattern": "(?:\\d{1,3}(?:\\.\\d{1,3}){3}|[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)",
+        "input_example": "google.com или 192.168.1.1"
+    },
+    "Проверить открытые порты (netstat)": {
+        "description": "Список прослушиваемых портов и связанных процессов",
+        "command": "netstat -anp tcp | Select-String LISTENING"
+    },
+    "Проверить DNS-сервера": {
+        "description": "Отображает текущие DNS-серверы, используемые сетевыми адаптерами",
+        "command": "Get-DnsClientServerAddress -AddressFamily IPv4 | Select-Object InterfaceAlias, ServerAddresses"
+    },
+    "Очистить кэш DNS": {
+        "description": "Очищает локальный кэш DNS",
+        "command": "Clear-DnsClientCache",
+        "requires_admin": True
+    },
+    "Сброс конфигурации сети": {
+        "description": "Сбрасывает настройки TCP/IP и кэш DNS (требует перезагрузки для полного эффекта)",
+        "command": "netsh int ip reset && netsh winsock reset && ipconfig /flushdns",
+        "requires_admin": True
+    },
+
+    # --- Безопасность ---
+    "Проверить статус Windows Defender": {
+        "description": "Проверяет статус основных компонентов Windows Defender",
+        "command": "Get-MpComputerStatus | Select-Object -Property AntivirusEnabled, AntispywareEnabled, NISEnabled, RealTimeProtectionEnabled"
+    },
+    "Проверить список запрещенных программ Windows Defender": {
+        "description": "Показывает список файлов и папок, игнорируемых Windows Defender",
+        "command": "Get-MpPreference | Select-Object -ExpandProperty ExclusionPath"
+    },
+    "Проверить список пользователей в группе администраторов": {
+        "description": "Отображает пользователей, входящих в группу 'Администраторы'",
+        "command": "Get-LocalGroupMember -Group 'Administrators' | Select-Object -Property Name, PrincipalSource | Format-Table -AutoSize"
+    },
+    "Проверить статус UAC": {
+        "description": "Проверяет текущий уровень уведомлений UAC",
+        "command": "Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name ConsentPromptBehaviorAdmin | Select-Object -ExpandProperty ConsentPromptBehaviorAdmin"
+    },
+
+    # --- Журналы ---
+    "Найти ошибки в системном журнале за последние 24ч": {
+        "description": "Поиск событий уровня 'Ошибка' в журнале System за последние 24 часа",
+        "command": "$time = (Get-Date).AddHours(-24); Get-WinEvent -FilterHashtable @{LogName='System'; Level=1,2,3; StartTime=$time} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, LevelDisplayName, Message | Format-Table -AutoSize"
+    },
+    "Найти ошибки в журнале Application за последние 24ч": {
+        "description": "Поиск событий уровня 'Ошибка' в журнале Application за последние 24 часа",
+        "command": "$time = (Get-Date).AddHours(-24); Get-WinEvent -FilterHashtable @{LogName='Application'; Level=1,2,3; StartTime=$time} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, LevelDisplayName, Message | Format-Table -AutoSize"
+    },
+
+    # --- Управление дисками и файлами ---
+    "Проверить диски на ошибки (PowerShell)": {
+        "description": "Запускает проверку дисков на наличие ошибок (аналог chkdsk /f без перезагрузки)",
+        "command": "Get-Volume | Where-Object {$_.DriveType -eq 'Fixed'} | ForEach-Object { $drive = $_.DriveLetter; Write-Output \"Проверка диска $drive:`\"; Repair-Volume -DriveLetter $drive -Scan -CimSession localhost }",
+        "requires_admin": True
+    },
+    "Получить список файлов по размеру": {
+        "description": "Список 100 самых больших файлов на диске C:",
+        "command": "Get-ChildItem -Path C:\\ -Recurse -File -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 100 -Property Name, @{Name='Size(MB)';Expression={[math]::Round($_.Length/1MB,2)}}, DirectoryName | Format-Table -AutoSize"
+    },
+    "Проверить дисковое пространство (все диски, подробно)": {
+        "description": "Подробная информация о свободном и занятом месте на всех дисках",
+        "command": "Get-WmiObject -Class Win32_LogicalDisk | Where-Object {$_.DriveType -eq 3} | Select-Object DeviceID, VolumeName, @{Name='Размер (ГБ)';Expression={[math]::Round($_.Size/1GB,2)}}, @{Name='Свободно (ГБ)';Expression={[math]::Round($_.FreeSpace/1GB,2)}}, @{Name='Занято (%)';Expression={[math]::Round((($_.Size-$_.FreeSpace)/$_.Size)*100,2)}} | Format-Table -AutoSize"
+    },
+
+    # --- Управление системой ---
+    "Перезагрузить систему": {
+        "description": "Перезагружает систему через 60 секунд с сообщением",
+        "command": "Restart-Computer -ComputerName localhost -Force -WhatIf", # Добавьте -Confirm:$false если нужно выполнить
+        "requires_admin": True
+    },
+    "Выключить систему": {
+        "description": "Выключает систему через 60 секунд с сообщением",
+        "command": "Stop-Computer -ComputerName localhost -Force -WhatIf", # Добавьте -Confirm:$false если нужно выполнить
+        "requires_admin": True
+    },
+    "Проверить обновления (только информация)": {
+        "description": "Проверяет наличие доступных обновлений (требует модуль PSWindowsUpdate)",
+        "command": "try { Get-WindowsUpdate -Download | Select-Object -Property KBArticleID, Title | Format-Table -AutoSize } catch { 'Модуль PSWindowsUpdate не установлен или обновления недоступны' }"
+    },
+    "Проверить статус служб Windows Update": {
+        "description": "Проверяет статус служб, связанных с обновлениями Windows",
+        "command": "Get-Service -Name wuauserv, bits, cryptsvc, msiserver | Select-Object Name, Status, StartType | Format-Table -AutoSize"
+    },
+    "Очистить диски (Disk Cleanup) - GUI": {
+        "description": "Запускает встроенный мастер очистки дисков Windows",
+        "command": "cleanmgr /sagerun:1", # Требует предварительной настройки профиля 1 или запуска cleanmgr без /sagerun для настройки
+        "requires_admin": True
+    },
+    "Очистить диски (PowerShell) - TEMP": {
+        "description": "Удаляет файлы из папки TEMP текущего пользователя и %WINDIR%\\Temp (требует админ)",
+        "command": "Remove-Item -Path $env:TEMP\\*, $env:WINDIR\\Temp\\* -Recurse -Force -ErrorAction SilentlyContinue",
+        "requires_admin": True
+    },
+
+    # --- Специфичные для PowerShell ---
+    "Проверить версию PowerShell": {
+        "description": "Отображает версию установленного PowerShell",
+        "command": "$PSVersionTable"
+    },
+    "Получить список модулей PowerShell": {
+        "description": "Список всех установленных модулей PowerShell",
+        "command": "Get-Module -ListAvailable | Select-Object -Property Name, Version, Path | Sort-Object Name | Format-Table -AutoSize"
+    },
+    "Проверить Execution Policy": {
+        "description": "Проверяет текущую политику выполнения скриптов PowerShell",
+        "command": "Get-ExecutionPolicy -List"
+    },
+    "Установить Execution Policy (RemoteSigned)": {
+        "description": "Устанавливает политику выполнения скриптов в RemoteSigned (требует админ)",
+        "command": "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force",
+        "requires_admin": True
+    },
+
+    "Проверить процесс по PID": {
+        "description": "Показать информацию о процессе по его идентификатору (PID)",
+        "template": "Get-Process -Id {input} -ErrorAction Stop | Select-Object -Property Name, Id, CPU, WorkingSet, Path | Format-List",
+        "input_prompt": "Введите идентификатор процесса (PID)",
+        "input_pattern": r"^\d+$", # Только цифры
+        "input_example": "1234"
     }
 }
