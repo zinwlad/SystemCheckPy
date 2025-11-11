@@ -1,27 +1,58 @@
 import sys
 import os
-import re
-import ctypes
-import logging
 import subprocess
+import json
+import logging
+import time
+import re
 from datetime import datetime
+from typing import Dict, Any, Optional, List, Tuple, Union
 
-# Импорты PyQt6
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QLabel, QComboBox, QPushButton, QVBoxLayout,
-    QWidget, QTextEdit, QProgressBar, QSpinBox, QLineEdit, QCheckBox,
-    QMessageBox, QFileDialog, QInputDialog, QHBoxLayout, QSplitter, QFrame,
-    QStatusBar, QMenuBar, QMenu, QSizePolicy, QSpacerItem, QStyle
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QTextEdit, QLabel, QComboBox, QMessageBox,
+    QProgressBar, QSizePolicy, QSplitter, QFrame, QMenuBar, QMenu, QFileDialog, QStatusBar,
+    QCheckBox, QLineEdit, QSpinBox
 )
-from PyQt6.QtGui import (
-    QTextCursor, QTextCharFormat, QColor, QFont, QIcon, QPixmap, QAction,
-    QGuiApplication, QPalette, QTextDocument, QTextBlockFormat, QTextFormat,
-    QScreen, QKeySequence
-)
-from PyQt6.QtCore import (
-    Qt, QThread, pyqtSignal, QTimer, QSettings, QSize, QPoint, QEvent,
-    QObject, QProcess, QProcessEnvironment, QCoreApplication
-)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, QPoint, QSettings
+from PyQt6.QtGui import QTextCursor, QAction, QIcon, QFont, QColor, QTextCharFormat, QTextFormat, QPalette, QKeySequence
+
+# Настройка логирования
+def setup_logging():
+    """Настройка системы логирования"""
+    log_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Файловый обработчик
+    file_handler = logging.FileHandler(
+        filename='system_check.log',
+        mode='w',
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(log_formatter)
+    file_handler.setLevel(logging.DEBUG)
+    
+    # Консольный обработчик
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(log_formatter)
+    console_handler.setLevel(logging.INFO)
+    
+    # Настройка корневого логгера
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+    
+    # Настройка логгера для PyQt
+    qt_logger = logging.getLogger('PyQt6')
+    qt_logger.setLevel(logging.WARNING)
+    
+    return root_logger
+
+# Инициализация логирования
+logger = setup_logging()
 
 # Импорты ваших модулей
 from system_checks import run_command, launch_command, collect_output
@@ -44,7 +75,7 @@ def create_icon_from_color(color: QColor) -> QIcon:
 
 class CommandWorker(QThread):
     finished = pyqtSignal(str, object)  # command_name, result
-    progress = pyqtSignal(str, bool)    # text, is_error
+    progress = pyqtSignal(str, bool)    # text, is_stderr
 
     def __init__(self, command, command_name, timeout=30):
         super().__init__()
@@ -53,61 +84,114 @@ class CommandWorker(QThread):
         self.timeout = timeout
         self.process = None
         self._cancelled = False
-
+        self.process = None
+        self._start_time = None
+        
     def cancel(self):
+        """Запрос отмены выполнения команды."""
         self._cancelled = True
-        try:
-            if self.process and self.process.poll() is None:  # Проверяем, что процесс ещё запущен
+        if self.process and self.process.poll() is None:
+            try:
                 self.process.terminate()
-                try:
-                    self.process.wait(timeout=1)  # Ждём завершения до 1 секунды
-                except:
-                    # Если не завершается, убиваем принудительно
-                    self.process.kill()
-        except Exception:
-            pass
-
+                self.progress.emit("Отмена выполнения команды...", False)  # False indicates this is not an error message
+            except Exception as e:
+                logger.error(f"Ошибка при отмене команды: {e}")
+                self.progress.emit(f"Ошибка при отмене команды: {e}", True)  # True indicates this is an error message
+    
     def run(self):
         """Запускает выполнение команды в отдельном потоке."""
-        logger = logging.getLogger(__name__)
-        logger.debug(f"Запуск команды: {self.command}")
+        logger.info(f"Запуск команды: {self.command_name}")
+        self._start_time = time.time()
         
         result = {
             "stdout": "",
-            "stderr": "Произошла ошибка при выполнении команды.",
+            "stderr": "",
             "returncode": -1,
-            "timeout": False
+            "timeout": False,
+            "execution_time": 0
         }
         
         try:
-            # Используем функцию launch_command из system_checks для правильного запуска PowerShell
-            from system_checks import launch_command, collect_output
+            self.progress.emit(f"Запуск команды: {self.command_name}...", False)
             
-            # Запускаем команду через PowerShell
+            # Запускаем команду
             self.process = launch_command(self.command)
             
-            if not self._cancelled:
-                # Собираем итоговый результат
-                result = collect_output(self.process, timeout=self.timeout)
+            if self._cancelled:
+                self._cleanup_process()
+                result["stderr"] = "Выполнение отменено пользователем"
+                result["returncode"] = -1
             else:
-                # Если отменено, убиваем процесс и формируем результат
-                try:
-                    if self.process:
-                        self.process.kill()
-                except Exception as e:
-                    logger.error(f"Ошибка при завершении процесса: {e}")
-                result = {
-                    "stdout": "",
-                    "stderr": "Отменено пользователем.",
-                    "returncode": -1,
-                    "timeout": False,
-                }
+                # Собираем вывод с таймаутом
+                result = collect_output(self.process, timeout=self.timeout)
+                
+                # Логируем результат
+                exec_time = time.time() - self._start_time
+                result["execution_time"] = round(exec_time, 2)
+                
+                log_msg = (
+                    f"Команда завершена: {self.command_name}\n"
+                    f"Код возврата: {result['returncode']}\n"
+                    f"Время выполнения: {result['execution_time']} сек"
+                )
+                
+                if result['stderr']:
+                    logger.warning(f"{log_msg}\nSTDERR: {result['stderr']}")
+                else:
+                    logger.info(log_msg)
+                    
+        except subprocess.TimeoutExpired:
+            self._cleanup_process()
+            error_msg = f"Превышено время ожидания ({self.timeout} сек)"
+            logger.error(f"{self.command_name}: {error_msg}")
+            self.progress.emit(error_msg, True)
+            result.update({
+                "stderr": error_msg,
+                "timeout": True,
+                "returncode": -2
+            })
+            
         except Exception as e:
-            logger.error(f"Ошибка при выполнении команды: {e}")
-            result["stderr"] = f"Ошибка при выполнении команды: {str(e)}"
+            self._cleanup_process()
+            error_msg = f"Ошибка при выполнении команды: {str(e)}"
+            logger.error(f"{self.command_name}: {error_msg}", exc_info=True)
+            result.update({
+                "stderr": error_msg,
+                "returncode": -1
+            })
+            
         finally:
-            # Всегда отправляем сигнал о завершении
+            # Гарантируем, что процесс завершен
+            self._cleanup_process()
+            
+            # Отправляем сигнал о завершении
             self.finished.emit(self.command_name, result)
+    
+    def _cleanup_process(self):
+        """Безопасное завершение процесса и освобождение ресурсов."""
+        if self.process:
+            try:
+                if self.process.poll() is None:
+                    # Процесс все еще выполняется, завершаем его
+                    self.process.terminate()
+                    try:
+                        self.process.wait(timeout=5)  # Даем время на корректное завершение
+                    except subprocess.TimeoutExpired:
+                        self.process.kill()  # Принудительное завершение
+                        self.process.wait()
+                
+                # Закрываем потоки ввода/вывода
+                for stream in [self.process.stdout, self.process.stderr]:
+                    if stream:
+                        try:
+                            stream.close()
+                        except Exception as e:
+                            logger.debug(f"Ошибка при закрытии потока: {e}")
+                            
+            except Exception as e:
+                logger.error(f"Ошибка при завершении процесса: {e}")
+            finally:
+                self.process = None
 
 
 class SystemCheckApp(QMainWindow):
@@ -116,7 +200,7 @@ class SystemCheckApp(QMainWindow):
         self.setWindowTitle("SystemCheckPy")
         
         # Устанавливаем размеры окна
-        screen = QGuiApplication.primaryScreen().availableGeometry()
+        screen = QApplication.primaryScreen().availableGeometry()
         width = min(1000, screen.width() - 50)
         height = min(700, screen.height() - 100)
         
@@ -804,27 +888,8 @@ def main():
         return 1
 
 if __name__ == "__main__":
-    # Create a simple test window first
+    # Initialize the application
     app = QApplication(sys.argv)
     
-    # Create a simple window
-    test_window = QMainWindow()
-    test_window.setWindowTitle("Test Window")
-    test_window.setGeometry(100, 100, 800, 600)
-    
-    # Add a label to the window
-    label = QLabel("If you can see this, the window is working!", test_window)
-    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    test_window.setCentralWidget(label)
-    
-    # Show the window
-    test_window.show()
-    
-    # If the test window works, try the main application
-    if test_window.isVisible():
-        test_window.close()
-        sys.exit(main())
-    else:
-        # If test window doesn't show, show error
-        QMessageBox.critical(None, "Ошибка", "Не удалось отобразить тестовое окно. Возможно, проблема с графической подсистемой.")
-        sys.exit(1)
+    # Run the main application
+    sys.exit(main())

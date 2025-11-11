@@ -4,126 +4,88 @@ import subprocess
 import logging
 import json
 import re
-from typing import Optional, Tuple, Dict, Any
+from typing import Dict, Any, Optional
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
 
-def _build_powershell_command(command: str) -> str:
-    """
-    Формирует безопасную команду запуска PowerShell с правильной обработкой вывода.
-    Возвращает кортеж (команда_для_запуска, use_shell).
-    """
-    logger = logging.getLogger(__name__)
-    logger.debug(f"Собираем команду PowerShell для: {command}")
-    
-    # Простая команда без обертки для отладки
-    if 'Get-ComputerInfo' in command:
-        # Для Get-ComputerInfo используем упрощенный формат вывода
-        command = "$OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; " \
-                 "Get-ComputerInfo | Select-Object -First 10 | Format-List"
-    
-    # Формируем полную команду
-    full_command = [
-        'powershell.exe',
-        '-NoProfile',
-        '-ExecutionPolicy', 'Bypass',
-        '-Command', command
-    ]
-    
-    logger.debug("Команда PowerShell сформирована")
-    return full_command
-
 def launch_command(command: str) -> subprocess.Popen:
     """
     Запускает команду в PowerShell и возвращает объект процесса.
+    
+    Args:
+        command: Команда PowerShell для выполнения
+        
+    Returns:
+        subprocess.Popen: Объект запущенного процесса
     """
     logger = logging.getLogger(__name__)
-    logger.info(f"Запуск команды: {command}")
+    logger.debug(f"Подготовка к запуску команды: {command}")
     
-    # Определяем команду в зависимости от типа
-    if 'Get-ComputerInfo' in command:
-        # Для команды Get-ComputerInfo используем упрощенный формат
-        ps_command = [
-            'powershell.exe',
-            '-NoProfile',
-            '-ExecutionPolicy', 'Bypass',
-            '-Command', "$OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-ComputerInfo | Select-Object -First 10 | Format-List"
-        ]
-    else:
-        # Для остальных команд используем как есть
-        ps_command = [
-            'powershell.exe',
-            '-NoProfile',
-            '-ExecutionPolicy', 'Bypass',
-            '-Command', f"$OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {command}"
-        ]
+    # Формируем команду с настройками кодировки и обработки ошибок
+    ps_command = [
+        'powershell.exe',
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command', f"""
+        $ErrorActionPreference = 'Stop'
+        $OutputEncoding = [System.Text.Encoding]::UTF8
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        try {{
+            {command}
+        }} catch {{
+            Write-Error $_.Exception.Message
+            exit 1
+        }}
+        """
+    ]
+    
+    logger.debug(f"Полная команда: {' '.join(ps_command)}")
     
     try:
-        # Запускаем процесс
+        # Запускаем процесс с текстовым режимом и UTF-8 кодировкой
         process = subprocess.Popen(
             ps_command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             shell=False,
-            universal_newlines=False,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
             creationflags=subprocess.CREATE_NO_WINDOW
         )
         logger.info(f"Процесс запущен с PID: {process.pid}")
         return process
+        
     except Exception as e:
         error_msg = f"Ошибка при запуске процесса: {str(e)}"
         logger.error(error_msg, exc_info=True)
         raise RuntimeError(error_msg) from e
 
-def _decode_output(output) -> str:
-    """Декодирует вывод команды с учетом кодировки.
+def _decode_output(output: str) -> str:
+    """
+    Обрабатывает вывод команды.
     
     Args:
-        output: Может быть bytes или str
+        output: Вывод команды (уже декодированный в строку)
+        
+    Returns:
+        str: Обработанный вывод
     """
-    logger = logging.getLogger(__name__)
-    
-    if not output:
+    if output is None:
         return ""
-    
-    try:
-        # Если вывод уже строка, возвращаем как есть
-        if isinstance(output, str):
-            return output
-            
-        # Если это bytes, декодируем
-        if isinstance(output, bytes):
-            # Сначала пробуем UTF-8
-            try:
-                return output.decode('utf-8', errors='replace')
-            except UnicodeDecodeError:
-                # Если не получилось, пробуем системную кодировку
-                try:
-                    return output.decode('cp1251', errors='replace')
-                except Exception as e:
-                    logger.warning(f"Не удалось декодировать вывод в cp1251: {e}")
-                    # В крайнем случае игнорируем ошибки
-                    return output.decode('utf-8', errors='ignore')
-        
-        # Для любых других типов просто преобразуем в строку
-        return str(output)
-        
-    except Exception as e:
-        logger.warning(f"Не удалось декодировать вывод команды: {e}")
-        try:
-            if isinstance(output, bytes):
-                return output.decode('utf-8', errors='ignore')
-            return str(output)
-        except Exception as e2:
-            logger.error(f"Критическая ошибка при обработке вывода: {e2}")
-            return "[Ошибка при обработке вывода]"
+    return str(output)
 
 def collect_output(process: subprocess.Popen, timeout: int = 30) -> Dict[str, Any]:
     """
-    Ожидает завершения процесса и возвращает словарь с stdout, stderr и кодом возврата.
-    В случае таймаута процесс убивается и возвращается соответствующее сообщение об ошибке.
-    { 'stdout': str, 'stderr': str, 'returncode': int, 'timeout': bool }
+    Собирает вывод из процесса и возвращает результат.
+    
+    Args:
+        process: Запущенный процесс
+        timeout: Таймаут ожидания завершения (в секундах)
+        
+    Returns:
+        Dict[str, Any]: Словарь с результатами выполнения команды
     """
     logger = logging.getLogger(__name__)
     logger.debug(f"Сбор вывода процесса (PID: {process.pid}), таймаут: {timeout} сек")
