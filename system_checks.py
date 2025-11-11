@@ -1,4 +1,5 @@
 # system_checks.py
+import os
 import subprocess
 import logging
 import json
@@ -11,34 +12,26 @@ logger = logging.getLogger(__name__)
 def _build_powershell_command(command: str) -> str:
     """
     Формирует безопасную команду запуска PowerShell с правильной обработкой вывода.
+    Возвращает кортеж (команда_для_запуска, use_shell).
     """
     logger = logging.getLogger(__name__)
     logger.debug(f"Собираем команду PowerShell для: {command}")
     
-    # Настройки для корректного отображения русского текста и работы с кодировкой
-    ps_preamble = (
-        "$OutputEncoding = [System.Text.Encoding]::UTF8; "
-        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-        "$PSDefaultParameterValues['*:Encoding'] = 'utf8'; "
-        "$ProgressPreference = 'SilentlyContinue'; "
-        "$ErrorActionPreference = 'Continue'; "
-        "Write-Host '=== НАЧАЛО ВЫВОДА КОМАНДЫ ==='; "
-    )
-    
-    # Оборачиваем команду в блок try-catch для перехвата ошибок
-    wrapped = (
-        f"try {{ {command} | Out-String -Width 4096; \"`n[Exit Code: $LASTEXITCODE]\" }} "
-        "catch {{ $_ | Out-String -Width 4096; \"`n[Exit Code: 1]\"; exit 1 }}; "
-        "Write-Host '=== КОНЕЦ ВЫВОДА КОМАНДЫ ===';"
-    )
+    # Простая команда без обертки для отладки
+    if 'Get-ComputerInfo' in command:
+        # Для Get-ComputerInfo используем упрощенный формат вывода
+        command = "$OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; " \
+                 "Get-ComputerInfo | Select-Object -First 10 | Format-List"
     
     # Формируем полную команду
-    full_command = (
-        'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
-        f'"{ps_preamble}{wrapped}"'
-    )
+    full_command = [
+        'powershell.exe',
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command', command
+    ]
     
-    logger.debug(f"Сформирована команда PowerShell: {full_command}")
+    logger.debug("Команда PowerShell сформирована")
     return full_command
 
 def launch_command(command: str) -> subprocess.Popen:
@@ -48,28 +41,33 @@ def launch_command(command: str) -> subprocess.Popen:
     logger = logging.getLogger(__name__)
     logger.info(f"Запуск команды: {command}")
     
-    # Строим команду PowerShell с правильными настройками
-    powershell_command = _build_powershell_command(command)
+    # Определяем команду в зависимости от типа
+    if 'Get-ComputerInfo' in command:
+        # Для команды Get-ComputerInfo используем упрощенный формат
+        ps_command = [
+            'powershell.exe',
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-Command', "$OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-ComputerInfo | Select-Object -First 10 | Format-List"
+        ]
+    else:
+        # Для остальных команд используем как есть
+        ps_command = [
+            'powershell.exe',
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-Command', f"$OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {command}"
+        ]
     
-    # Настройки для запуска процесса
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startupinfo.wShowWindow = subprocess.SW_HIDE
-    
-    # Создаем процесс с правильными настройками
     try:
-        logger.debug("Запуск процесса PowerShell...")
+        # Запускаем процесс
         process = subprocess.Popen(
-            powershell_command,
+            ps_command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            stdin=subprocess.PIPE,
-            shell=True,
-            startupinfo=startupinfo,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            text=False,
-            bufsize=-1,  # Используем буфер по умолчанию
-            universal_newlines=False
+            shell=False,
+            universal_newlines=False,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         logger.info(f"Процесс запущен с PID: {process.pid}")
         return process
@@ -78,29 +76,48 @@ def launch_command(command: str) -> subprocess.Popen:
         logger.error(error_msg, exc_info=True)
         raise RuntimeError(error_msg) from e
 
-def _decode_output(output: bytes) -> str:
+def _decode_output(output) -> str:
+    """Декодирует вывод команды с учетом кодировки.
+    
+    Args:
+        output: Может быть bytes или str
     """
-    Декодирует вывод команды с учетом кодировки.
-    """
-    if not output:
-        return ""
-        
     logger = logging.getLogger(__name__)
     
-    # Список кодировок для попытки декодирования
-    encodings = ['cp1251', 'utf-8', 'cp866', 'iso-8859-1']
+    if not output:
+        return ""
     
-    for encoding in encodings:
+    try:
+        # Если вывод уже строка, возвращаем как есть
+        if isinstance(output, str):
+            return output
+            
+        # Если это bytes, декодируем
+        if isinstance(output, bytes):
+            # Сначала пробуем UTF-8
+            try:
+                return output.decode('utf-8', errors='replace')
+            except UnicodeDecodeError:
+                # Если не получилось, пробуем системную кодировку
+                try:
+                    return output.decode('cp1251', errors='replace')
+                except Exception as e:
+                    logger.warning(f"Не удалось декодировать вывод в cp1251: {e}")
+                    # В крайнем случае игнорируем ошибки
+                    return output.decode('utf-8', errors='ignore')
+        
+        # Для любых других типов просто преобразуем в строку
+        return str(output)
+        
+    except Exception as e:
+        logger.warning(f"Не удалось декодировать вывод команды: {e}")
         try:
-            decoded = output.decode(encoding)
-            logger.debug(f"Успешно декодировано с кодировкой {encoding}")
-            return decoded
-        except UnicodeDecodeError:
-            continue
-    
-    # Если ни одна кодировка не сработала, используем замену нечитаемых символов
-    logger.warning("Не удалось декодировать вывод с использованием стандартных кодировок, используется замена символов")
-    return output.decode(errors='replace')
+            if isinstance(output, bytes):
+                return output.decode('utf-8', errors='ignore')
+            return str(output)
+        except Exception as e2:
+            logger.error(f"Критическая ошибка при обработке вывода: {e2}")
+            return "[Ошибка при обработке вывода]"
 
 def collect_output(process: subprocess.Popen, timeout: int = 30) -> Dict[str, Any]:
     """
@@ -111,58 +128,65 @@ def collect_output(process: subprocess.Popen, timeout: int = 30) -> Dict[str, An
     logger = logging.getLogger(__name__)
     logger.debug(f"Сбор вывода процесса (PID: {process.pid}), таймаут: {timeout} сек")
     
-    # Функция для безопасного чтения вывода
-    def read_output(stream, buffer):
-        try:
-            while True:
-                line = stream.readline()
-                if not line:
-                    break
-                buffer.append(line)
-                logger.debug(f"Получена строка вывода: {line.decode('utf-8', errors='replace').strip()}")
-        except Exception as e:
-            logger.error(f"Ошибка при чтении вывода: {str(e)}")
-    
-    # Запускаем потоки для чтения вывода
-    stdout_buffer = []
-    stderr_buffer = []
-    
-    from threading import Thread
-    stdout_thread = Thread(target=read_output, args=(process.stdout, stdout_buffer))
-    stderr_thread = Thread(target=read_output, args=(process.stderr, stderr_buffer))
-    
-    stdout_thread.start()
-    stderr_thread.start()
-    
     try:
-        # Ожидаем завершения процесса с таймаутом
-        process.wait(timeout=timeout)
-        
-        # Дожидаемся завершения потоков чтения
-        stdout_thread.join(timeout=5)
-        stderr_thread.join(timeout=5)
-        
-        # Получаем вывод
-        stdout = b''.join(stdout_buffer) if stdout_buffer else b''
-        stderr = b''.join(stderr_buffer) if stderr_buffer else b''
+        # Пытаемся дождаться завершения процесса с таймаутом
+        logger.debug("Ожидаем завершения процесса...")
+        stdout, stderr = process.communicate(timeout=timeout)
         
         # Декодируем вывод
-        stdout_str = _decode_output(stdout)
-        stderr_str = _decode_output(stderr)
+        stdout_str = _decode_output(stdout) if stdout else ""
+        stderr_str = _decode_output(stderr) if stderr else ""
         
-        # Логируем часть вывода для отладки
+        # Логируем информацию о выводе
+        logger.debug(f"Процесс завершен с кодом {process.returncode}")
+        
+        # Если вывод пустой, но процесс завершился успешно, пробуем альтернативный метод
+        if not stdout_str and not stderr_str and process.returncode == 0:
+            logger.warning("И stdout, и stderr пустые, хотя процесс завершился успешно. Пробуем альтернативный метод...")
+            
+            # Пробуем выполнить команду напрямую через subprocess.run
+            alt_cmd = [
+                'powershell.exe',
+                '-NoProfile',
+                '-ExecutionPolicy', 'Bypass',
+                '-Command', "$OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-ComputerInfo | Select-Object -First 10 | Format-List"
+            ]
+            
+            try:
+                result = subprocess.run(
+                    alt_cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    timeout=30
+                )
+                
+                if result.stdout:
+                    stdout_str = result.stdout
+                    logger.info("Успешно получили вывод через subprocess.run")
+                else:
+                    logger.warning("Альтернативный метод не вернул данных")
+                    
+            except Exception as alt_e:
+                logger.error(f"Ошибка при альтернативном выполнении команды: {alt_e}")
+        
+        # Логируем результат
         if stdout_str:
-            sample = stdout_str[:200] + ('...' if len(stdout_str) > 200 else '')
-            logger.debug(f"Вывод stdout (первые 200 символов): {sample}")
+            sample = stdout_str[:500] + ('...' if len(stdout_str) > 500 else '')
+            logger.debug(f"Вывод stdout (первые 500 символов):\n{sample}")
+        else:
+            logger.warning("STDOUT пуст")
+            
         if stderr_str:
-            sample = stderr_str[:200] + ('...' if len(stderr_str) > 200 else '')
-            logger.debug(f"Вывод stderr (первые 200 символов): {sample}")
+            sample = stderr_str[:500] + ('...' if len(stderr_str) > 500 else '')
+            logger.warning(f"Вывод stderr (первые 500 символов):\n{sample}")
             
         return {
             "stdout": stdout_str,
             "stderr": stderr_str,
             "returncode": process.returncode,
-            "timeout": False,
+            "timeout": False
         }
     except subprocess.TimeoutExpired:
         process.kill()

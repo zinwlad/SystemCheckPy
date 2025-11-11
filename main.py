@@ -1,34 +1,50 @@
-#main.py
 import sys
 import os
 import re
 import ctypes
 import logging
+import subprocess
 from datetime import datetime
 
 # Импорты PyQt6
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QComboBox, QPushButton, QVBoxLayout,
     QWidget, QTextEdit, QProgressBar, QSpinBox, QLineEdit, QCheckBox,
-    QMessageBox, QFileDialog, QInputDialog, QHBoxLayout, QSplitter, QFrame
+    QMessageBox, QFileDialog, QInputDialog, QHBoxLayout, QSplitter, QFrame,
+    QStatusBar, QMenuBar, QMenu, QSizePolicy, QSpacerItem, QStyle
 )
 from PyQt6.QtGui import (
-    QFont, QPalette, QColor, QAction, QKeySequence, QTextCursor, QTextCharFormat
+    QTextCursor, QTextCharFormat, QColor, QFont, QIcon, QPixmap, QAction,
+    QGuiApplication, QPalette, QTextDocument, QTextBlockFormat, QTextFormat,
+    QScreen, QKeySequence
 )
 from PyQt6.QtCore import (
-    QThread, pyqtSignal, QSettings, Qt, QTimer
+    Qt, QThread, pyqtSignal, QTimer, QSettings, QSize, QPoint, QEvent,
+    QObject, QProcess, QProcessEnvironment, QCoreApplication
 )
 
 # Импорты ваших модулей
 from system_checks import run_command, launch_command, collect_output
-from logger import setup_logger, log_command_result
 from admin_check import is_admin
 from commands import commands
 
 
+logger = logging.getLogger(__name__)
+
+# --- Глобальные настройки ---
+DEFAULT_TIMEOUT = 60
+LONG_RUNNING_COMMANDS = {"Проверить целостность системных файлов", "Выполнить CHKDSK", "Выполнить DISM"}
+
+# --- Вспомогательная функция для создания иконок ---
+def create_icon_from_color(color: QColor) -> QIcon:
+    """Создаёт иконку из сплошного цвета."""
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(color)
+    return QIcon(pixmap)
+
 class CommandWorker(QThread):
-    finished = pyqtSignal(str, object)
-    progress = pyqtSignal(str, bool)  # text, is_stderr
+    finished = pyqtSignal(str, object)  # command_name, result
+    progress = pyqtSignal(str, bool)    # text, is_error
 
     def __init__(self, command, command_name, timeout=30):
         super().__init__()
@@ -42,7 +58,6 @@ class CommandWorker(QThread):
         self._cancelled = True
         try:
             if self.process and self.process.poll() is None:  # Проверяем, что процесс ещё запущен
-                # Попробовать завершить процесс корректно
                 self.process.terminate()
                 try:
                     self.process.wait(timeout=1)  # Ждём завершения до 1 секунды
@@ -53,104 +68,92 @@ class CommandWorker(QThread):
             pass
 
     def run(self):
-        result = {"stdout": "", "stderr": "", "returncode": -1, "error": None}
+        """Запускает выполнение команды в отдельном потоке."""
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Запуск команды: {self.command}")
+        
+        result = {
+            "stdout": "",
+            "stderr": "Произошла ошибка при выполнении команды.",
+            "returncode": -1,
+            "timeout": False
+        }
+        
         try:
-            # Запускаем команду
+            # Используем функцию launch_command из system_checks для правильного запуска PowerShell
+            from system_checks import launch_command, collect_output
+            
+            # Запускаем команду через PowerShell
             self.process = launch_command(self.command)
             
-            # Буферы для сбора вывода
-            stdout_chunks = []
-            stderr_chunks = []
-            
-            # Чтение stdout и stderr в реальном времени
-            while True:
-                # Проверяем, не отменен ли процесс
-                if self._cancelled:
-                    self.process.terminate()
-                    result["stderr"] = "Команда отменена пользователем.\n"
-                    break
-                    
-                # Проверяем, завершился ли процесс
-                return_code = self.process.poll()
-                if return_code is not None:
-                    # Процесс завершился, дочитываем оставшийся вывод
-                    for line in self.process.stdout:
-                        try:
-                            text = line.decode('utf-8', errors='replace')
-                        except Exception:
-                            text = line.decode(errors='replace')
-                        stdout_chunks.append(text)
-                        self.progress.emit(text, False)
-                        
-                    for line in self.process.stderr:
-                        try:
-                            text = line.decode('utf-8', errors='replace')
-                        except Exception:
-                            text = line.decode(errors='replace')
-                        stderr_chunks.append(text)
-                        self.progress.emit(text, True)
-                    
-                    result.update({
-                        "stdout": "".join(stdout_chunks),
-                        "stderr": "".join(stderr_chunks),
-                        "returncode": return_code
-                    })
-                    break
-                    
-                # Чтение вывода, если он есть
-                for stream, chunks, is_error in [
-                    (self.process.stdout, stdout_chunks, False),
-                    (self.process.stderr, stderr_chunks, True)
-                ]:
-                    if stream is None:
-                        continue
-                    for line in iter(stream.readline, b''):
-                        try:
-                            text = line.decode('utf-8', errors='replace')
-                        except Exception:
-                            text = line.decode(errors='replace')
-                        chunks.append(text)
-                        self.progress.emit(text, is_error)
-                        
-            # Если процесс все еще выполняется, завершаем его
-            if self.process.poll() is None:
-                try:
-                    self.process.terminate()
-                    self.process.wait(timeout=2)
-                except:
-                    try:
-                        self.process.kill()
-                    except:
-                        pass
-                        
-        except Exception as e:
-            error_msg = str(e)
-            result.update({
-                "error": error_msg,
-                "stderr": f"Ошибка при выполнении команды: {error_msg}"
-            })
-            
-        # Если команда была отменена, обновляем сообщение об ошибке
-        if self._cancelled and result.get("returncode", 0) != 0:
-            result["stderr"] = (result.get("stderr") or "").strip()
-            if result["stderr"]:
-                result["stderr"] = f"Отменено пользователем.\n{result['stderr']}"
+            if not self._cancelled:
+                # Собираем итоговый результат
+                result = collect_output(self.process, timeout=self.timeout)
             else:
-                result["stderr"] = "Отменено пользователем."
-        self.finished.emit(self.command_name, result)
+                # Если отменено, убиваем процесс и формируем результат
+                try:
+                    if self.process:
+                        self.process.kill()
+                except Exception as e:
+                    logger.error(f"Ошибка при завершении процесса: {e}")
+                result = {
+                    "stdout": "",
+                    "stderr": "Отменено пользователем.",
+                    "returncode": -1,
+                    "timeout": False,
+                }
+        except Exception as e:
+            logger.error(f"Ошибка при выполнении команды: {e}")
+            result["stderr"] = f"Ошибка при выполнении команды: {str(e)}"
+        finally:
+            # Всегда отправляем сигнал о завершении
+            self.finished.emit(self.command_name, result)
 
 
 class SystemCheckApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SystemCheckPy")
-        self.setGeometry(100, 100, 800, 600)
+        
+        # Устанавливаем размеры окна
+        screen = QGuiApplication.primaryScreen().availableGeometry()
+        width = min(1000, screen.width() - 50)
+        height = min(700, screen.height() - 100)
+        
+        # Устанавливаем геометрию и минимальный размер
+        self.resize(width, height)
+        self.setMinimumSize(800, 600)
+        
+        # Центрируем окно
+        frame_geometry = self.frameGeometry()
+        center_point = screen.center()
+        frame_geometry.moveCenter(center_point)
+        self.move(frame_geometry.topLeft())
+        
         # Настройки приложения
         self.settings = QSettings("SystemCheckPy", "SystemCheckPyApp")
+        
+        # Инициализируем UI
         self.initUI()
+        
+        # Применяем тему
         self.apply_theme()
+        
+        # Убедимся, что окно будет видимым
+        self.show()
+        self.activateWindow()
+        self.raise_()
+        
+        # Принудительно обновляем окно
+        QApplication.processEvents()
 
     def initUI(self):
+        # Сначала создаем все виджеты
+        self.fav_only_checkbox = QCheckBox("Только избранное")
+        
+        # Затем настраиваем меню, которое зависит от виджетов
+        self.create_menu_bar()
+        
         # Центральный виджет
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -161,32 +164,34 @@ class SystemCheckApp(QMainWindow):
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("🔍 Поиск команды...")
-        self.search_input.textChanged.connect(self.refresh_command_list)
+        self.search_input.setStyleSheet("padding: 5px; border: 1px solid #ccc; border-radius: 3px;")
         toolbar_layout.addWidget(self.search_input)
 
-        self.fav_only_checkbox = QCheckBox("★ Только избранное")
-        self.fav_only_checkbox.stateChanged.connect(self.refresh_command_list)
         toolbar_layout.addWidget(self.fav_only_checkbox)
 
         main_layout.addLayout(toolbar_layout)
 
         # --- Разделение на панели ---
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(5) # Ширина разделителя
         main_layout.addWidget(splitter)
 
         # Левая панель (команды, описание)
         left_frame = QFrame()
+        left_frame.setStyleSheet("QFrame { background-color: #f9f9f9; border-right: 1px solid #ccc; }") # Светлый фон
         left_layout = QVBoxLayout(left_frame)
         left_layout.setAlignment(Qt.AlignmentFlag.AlignTop) # Выравнивание по верху
 
         self.command_dropdown = QComboBox()
         self.command_dropdown.setPlaceholderText("Выберите команду...")
+        self.command_dropdown.setStyleSheet("padding: 5px; border: 1px solid #ccc; border-radius: 3px;")
         left_layout.addWidget(QLabel("Выберите команду:"))
         left_layout.addWidget(self.command_dropdown)
 
         # Кнопка избранного
         fav_button_layout = QHBoxLayout()
         self.favorite_button = QPushButton("☆ В избранное")
+        self.favorite_button.setStyleSheet("QPushButton { padding: 5px; }")
         self.favorite_button.clicked.connect(self.toggle_favorite)
         fav_button_layout.addWidget(self.favorite_button)
         fav_button_layout.addStretch() # Растягиваем, чтобы кнопка была слева
@@ -195,21 +200,23 @@ class SystemCheckApp(QMainWindow):
         # Описание
         self.description_label = QLabel("Выберите команду для отображения описания.")
         self.description_label.setWordWrap(True) # Перенос текста
-        self.description_label.setStyleSheet("QLabel { background-color: #f0f0f0; padding: 5px; border-radius: 3px; }")
+        self.description_label.setStyleSheet("QLabel { background-color: #eef5ff; padding: 8px; border-radius: 3px; border: 1px solid #ccc; }") # Светло-голубой фон
         left_layout.addWidget(QLabel("Описание:"))
         left_layout.addWidget(self.description_label)
 
         # Правая панель (результат)
         right_frame = QFrame()
+        right_frame.setStyleSheet("QFrame { background-color: #ffffff; }") # Белый фон
         right_layout = QVBoxLayout(right_frame)
 
         self.result_text = QTextEdit()
         self.result_text.setReadOnly(True)
         # Моноширинный шрифт и отключение переноса строк
-        mono = QFont("Consolas", 9)
+        mono = QFont("Consolas", 10) # Увеличен размер шрифта
         mono.setStyleHint(QFont.StyleHint.Monospace)
         self.result_text.setFont(mono)
         self.result_text.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        self.result_text.setStyleSheet("QTextEdit { border: 1px solid #ccc; }") # Рамка
 
         right_layout.addWidget(QLabel("Результат:"))
         right_layout.addWidget(self.result_text)
@@ -217,11 +224,12 @@ class SystemCheckApp(QMainWindow):
         # Добавляем панели в сплиттер
         splitter.addWidget(left_frame)
         splitter.addWidget(right_frame)
-        splitter.setSizes([300, 500]) # Устанавливаем начальные размеры
+        splitter.setSizes([350, 650]) # Установлены начальные размеры
 
         # --- Панель управления ---
         controls_frame = QFrame()
         controls_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        controls_frame.setStyleSheet("QFrame { background-color: #f0f0f0; padding: 5px; }") # Светло-серый фон
         controls_layout = QHBoxLayout(controls_frame)
 
         # Таймаут
@@ -229,7 +237,8 @@ class SystemCheckApp(QMainWindow):
         timeout_layout.addWidget(QLabel("⏱️ Таймаут (сек):"))
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(5, 36000)
-        self.timeout_spin.setValue(60)
+        self.timeout_spin.setValue(DEFAULT_TIMEOUT)
+        self.timeout_spin.setStyleSheet("padding: 3px;")
         timeout_layout.addWidget(self.timeout_spin)
         timeout_layout.addStretch() # Растягиваем
         controls_layout.addLayout(timeout_layout)
@@ -237,28 +246,34 @@ class SystemCheckApp(QMainWindow):
         # Прогресс
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
+        self.progress_bar.setStyleSheet("QProgressBar { text-align: center; }") # Центрирование текста
         controls_layout.addWidget(self.progress_bar)
 
         # Кнопки
         button_layout = QHBoxLayout()
         self.execute_button = QPushButton("▶️ Выполнить")
+        self.execute_button.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; padding: 5px 10px; border-radius: 3px; } QPushButton:hover { background-color: #45a049; }") # Зелёная кнопка
         self.execute_button.clicked.connect(self.execute_command)
         button_layout.addWidget(self.execute_button)
 
         self.cancel_button = QPushButton("❌ Отмена")
         self.cancel_button.setEnabled(False)
+        self.cancel_button.setStyleSheet("QPushButton { background-color: #f44336; color: white; padding: 5px 10px; border-radius: 3px; } QPushButton:hover { background-color: #da190b; }") # Красная кнопка
         self.cancel_button.clicked.connect(self.cancel_command)
         button_layout.addWidget(self.cancel_button)
 
         self.clear_button = QPushButton("🗑️ Очистить")
+        self.clear_button.setStyleSheet("QPushButton { padding: 5px 10px; }")
         self.clear_button.clicked.connect(self.result_text.clear)
         button_layout.addWidget(self.clear_button)
 
         self.copy_button = QPushButton("📋 Копировать")
+        self.copy_button.setStyleSheet("QPushButton { padding: 5px 10px; }")
         self.copy_button.clicked.connect(self.copy_to_clipboard)
         button_layout.addWidget(self.copy_button)
 
         self.save_button = QPushButton("💾 Сохранить")
+        self.save_button.setStyleSheet("QPushButton { padding: 5px 10px; }")
         self.save_button.clicked.connect(self.save_result)
         button_layout.addWidget(self.save_button)
 
@@ -268,22 +283,18 @@ class SystemCheckApp(QMainWindow):
 
         # --- Нижняя панель ---
         bottom_layout = QHBoxLayout()
-        self.view_log_button = QPushButton("📄 Просмотр лога")
-        self.view_log_button.clicked.connect(self.view_log)
-        bottom_layout.addWidget(self.view_log_button)
-
-        self.open_logs_button = QPushButton("📂 Открыть папку логов")
-        self.open_logs_button.clicked.connect(self.open_logs_folder)
-        bottom_layout.addWidget(self.open_logs_button)
-
+        bottom_layout.addStretch()
         self.exit_button = QPushButton("🚪 Выход")
+        self.exit_button.setStyleSheet("QPushButton { padding: 5px 10px; }")
         self.exit_button.clicked.connect(self.close)
         bottom_layout.addWidget(self.exit_button)
 
         main_layout.addLayout(bottom_layout)
 
         # Статусбар
-        self.statusBar().showMessage("Готово")
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("Готово")
 
         # Инициализация списка команд и избранного
         self.all_commands = list(commands.keys())
@@ -297,7 +308,43 @@ class SystemCheckApp(QMainWindow):
         self.refresh_command_list()
 
         # Горячие клавиши
-        # PyQt6: QShortcut теперь принимает QKeySequence в конструкторе
+        self.setup_shortcuts()
+
+        # Восстанавливаем настройки
+        saved_timeout = int(self.settings.value("timeout", DEFAULT_TIMEOUT))
+        self.timeout_spin.setValue(saved_timeout)
+
+    def create_menu_bar(self):
+        """Создаёт меню."""
+        menubar = self.menuBar()
+
+        # Меню 'Файл'
+        file_menu = menubar.addMenu('Файл')
+        save_action = QAction('Сохранить результат', self)
+        save_action.setShortcut(QKeySequence.StandardKey.Save)
+        save_action.triggered.connect(self.save_result)
+        file_menu.addAction(save_action)
+
+        exit_action = QAction('Выход', self)
+        exit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        # Меню 'Вид'
+        view_menu = menubar.addMenu('Вид')
+        toggle_fav_action = QAction('Только избранное', self, checkable=True)
+        toggle_fav_action.setChecked(self.fav_only_checkbox.isChecked())
+        toggle_fav_action.triggered.connect(lambda: self.fav_only_checkbox.setChecked(not self.fav_only_checkbox.isChecked()))
+        view_menu.addAction(toggle_fav_action)
+
+        # Меню 'Помощь'
+        help_menu = menubar.addMenu('Помощь')
+        about_action = QAction('О программе', self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+
+    def setup_shortcuts(self):
+        """Настраивает горячие клавиши."""
         execute_shortcut = QAction("Execute", self)
         execute_shortcut.setShortcut(QKeySequence.StandardKey.InsertParagraphSeparator) # Ctrl+Enter не работает как StandardKey, используем InsertParagraphSeparator или кастомный
         execute_shortcut.triggered.connect(self.execute_command)
@@ -323,14 +370,11 @@ class SystemCheckApp(QMainWindow):
         cancel_shortcut.triggered.connect(self.cancel_command)
         self.addAction(cancel_shortcut)
 
-        # Восстанавливаем настройки
-        saved_timeout = int(self.settings.value("timeout", 60))
-        self.timeout_spin.setValue(saved_timeout)
-
     def apply_theme(self):
         """Применяет светлую тему."""
         # PyQt6 использует QPalette для настройки цветов
         palette = QPalette()
+        # Можно настроить конкретные цвета, например:
         # palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
         # palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))
         # palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
@@ -346,6 +390,10 @@ class SystemCheckApp(QMainWindow):
         # palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
         self.setPalette(palette)
 
+    def show_about(self):
+        """Показывает окно 'О программе'."""
+        QMessageBox.about(self, "О SystemCheckPy", "SystemCheckPy v1.0\n\nУтилита для диагностики системы Windows.")
+
     def update_description(self):
         selected_command = self.command_dropdown.currentText()
         if selected_command and selected_command in commands:
@@ -354,8 +402,10 @@ class SystemCheckApp(QMainWindow):
             # Обновляем состояние кнопки избранного
             if selected_command in self.favorites:
                 self.favorite_button.setText("★ Удалить из избранного")
+                # self.favorite_button.setIcon(create_icon_from_color(QColor("#FFD700"))) # Жёлтая звезда (опционально)
             else:
                 self.favorite_button.setText("☆ В избранное")
+                # self.favorite_button.setIcon(QIcon()) # Убираем иконку (опционально)
             self.execute_button.setEnabled(True)
         else:
             self.description_label.setText("Команда не выбрана или не найдена.")
@@ -364,15 +414,11 @@ class SystemCheckApp(QMainWindow):
 
     def execute_command(self):
         selected_command = self.command_dropdown.currentText()
-        logger = logging.getLogger(__name__)
 
         if not selected_command:
-            logger.warning("Попытка выполнения пустой команды")
             return
 
         meta = commands.get(selected_command, {})
-        logger.debug(f"Метаданные команды {selected_command}: {meta}")
-
         # Проверка прав администратора для команды
         if meta.get("requires_admin") and not is_admin():
             reply = QMessageBox.question(
@@ -393,75 +439,51 @@ class SystemCheckApp(QMainWindow):
             prompt = meta.get("input_prompt", "Введите значение")
             text, ok = QInputDialog.getText(self, "Параметр команды", prompt)
             if not ok or not text.strip():
-                self.set_status("Отменено пользователем", is_error=True)
+                self.execute_button.setEnabled(False)
                 return
-            user_input = text.strip()
-            # Базовая проверка недопустимых символов для безопасности
-            disallowed = set(";|&><`$\n\r\t\0")
-            if any(ch in disallowed for ch in user_input):
-                self.set_status("Недопустимые символы во вводе", is_error=True)
+            try:
+                command = meta["template"].format(input=text)
+            except (KeyError, ValueError) as e:
+                QMessageBox.warning(self, "Ошибка", f"Неверный формат параметра: {e}")
                 return
-            # Проверка по шаблону, если задан
-            pattern = meta.get("input_pattern")
-            if pattern:
-                try:
-                    if re.fullmatch(pattern, user_input) is None:
-                        example = meta.get("input_example", "")
-                        hint = f" Пример: {example}" if example else ""
-                        self.set_status("Ввод не соответствует формату." + hint, is_error=True)
-                        return
-                except re.error:
-                    # Если шаблон неисправен, пропускаем проверку
-                    pass
-
-            # Получаем команду для выполнения
-            command = meta["template"].format(input=user_input)
         else:
+            # Если нет template, используем стандартную команду
             command = meta["command"]
 
-        # Настройка интерфейса перед выполнением команды
-        self.set_status("Выполняется...")
-        self.result_text.clear()
-        self.append_stream("Выполняется...\n", False)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)
-        self.execute_button.setEnabled(False)
-        self.cancel_button.setEnabled(True)
-        # УБРАНО: QApplication.processEvents() перед запуском потока
-
-        # Увеличенный таймаут для долгих команд
-        LONG = {"Проверить целостность системных файлов", "Выполнить CHKDSK", "Выполнить DISM"}
-        user_timeout = int(self.timeout_spin.value())
-        timeout = max(user_timeout, 1800) if selected_command in LONG else user_timeout
-
         try:
+            # Настройка интерфейса перед выполнением команды
+            self.set_status("Выполняется...")
+            
+            # Сохраняем текущую позицию прокрутки
+            scroll_position = self.result_text.verticalScrollBar().value()
+            
+            # Очищаем только если это новая команда, а не продолжение вывода
+            if not self.result_text.toPlainText():
+                self.result_text.clear()
+                
+            self.append_stream("\n" + "=" * 50 + "\n", False)
+            self.append_stream(f"ВЫПОЛНЕНИЕ КОМАНДЫ: {selected_command}\n", False)
+            self.append_stream("=" * 50 + "\n\n", False)
+            
+            # Прокручиваем к началу вывода
+            self.result_text.verticalScrollBar().setValue(self.result_text.verticalScrollBar().maximum())
+            
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setRange(0, 0)
+            self.execute_button.setEnabled(False)
+            self.cancel_button.setEnabled(True)
+
+            # Увеличенный таймаут для долгих команд
+            user_timeout = int(self.timeout_spin.value())
+            timeout = max(user_timeout, 1800) if selected_command in LONG_RUNNING_COMMANDS else user_timeout
+
+            # Создаем и запускаем воркер
             self.worker = CommandWorker(command, selected_command, timeout=timeout)
-            self.worker.progress.connect(self.on_stream_progress)
-            self.worker.finished.connect(self.on_command_finished)
-            self.worker.start() # Запускаем поток ПОСЛЕ настройки интерфейса
-        except Exception as e:
-            error_msg = f"Ошибка при запуске команды: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            self.set_status("Ошибка при запуске команды", is_error=True)
-            self.result_text.append(error_msg)
-            self.progress_bar.setVisible(False)
-            self.execute_button.setEnabled(True)
-            self.cancel_button.setEnabled(False)
-            # QMessageBox.critical(self, "Ошибка повышения прав", f"Не удалось перезапустить с правами администратора:\n{e}") # УБРАНО: лишний вызов
-            # QApplication.quit() # УБРАНО: лишний quit
-
-    def _start_command_worker(self, command, command_name, timeout):
-        """Запускает выполнение команды в отдельном потоке."""
-        try:
-            self.worker = CommandWorker(command, command_name, timeout=timeout)
-            self.worker.progress.connect(self.on_stream_progress)
-            self.worker.finished.connect(self.on_command_finished)
+            self.worker.progress[str, bool].connect(self.on_stream_progress)
+            self.worker.finished[str, object].connect(self.on_command_finished)
             self.worker.start()
+
         except Exception as e:
-            error_msg = f"Ошибка при запуске команды: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            self.set_status("Ошибка при запуске команды", is_error=True)
-            self.result_text.append(error_msg)
             self.progress_bar.setVisible(False)
             self.execute_button.setEnabled(True)
             self.cancel_button.setEnabled(False)
@@ -509,36 +531,78 @@ class SystemCheckApp(QMainWindow):
             self.update_description()
 
     def on_command_finished(self, command_name, result):
-        logger = logging.getLogger(__name__)
-        logger.debug(f"Завершено выполнение команды: {command_name}")
-
         # result: dict => {'stdout','stderr','returncode','timeout'}
-        stdout = result.get("stdout", "") if isinstance(result, dict) else str(result)
-        stderr = result.get("stderr", "") if isinstance(result, dict) else ""
-        returncode = result.get("returncode", 0) if isinstance(result, dict) else (0 if stdout and not stdout.startswith("Ошибка") else 1)
+        stdout = result.get("stdout", "")
+        stderr = result.get("stderr", "")
+        returncode = result.get("returncode", 0)
         success = (returncode == 0)
-
-        logger.debug(f"Результат выполнения: success={success}, returncode={returncode}")
-        logger.debug(f"STDOUT: {stdout[:200]}..." if len(stdout) > 200 else f"STDOUT: {stdout}")
-        if stderr:
-            logger.warning(f"STDERR: {stderr}")
-
-        # Финальный вывод: сначала stdout, потом stderr
-        self.result_text.clear() # Очищаем перед финальным выводом
-        if stdout:
-            self.result_text.append(stdout.rstrip()) # append добавляет новую строку
-        if stderr:
-            # Добавим stderr в конец, выделив цветом с помощью HTML
-            self.append_stderr_to_result(stderr.rstrip())
-
-        log_command_result(command_name, stdout if success else stderr, success=success)
+        
+        # Очищаем предыдущий вывод
+        self.result_text.clear()
+        
+        # Добавляем заголовок команды
+        self.append_stream(f"ВЫПОЛНЕНИЕ КОМАНДЫ: {command_name}\n", False)
+        self.append_stream("=" * 50 + "\n\n", False)
+        
+        # Выводим результат выполнения
+        if success:
+            self.append_stream("✅ КОМАНДА УСПЕШНО ВЫПОЛНЕНА\n\n", False)
+        else:
+            self.append_stream(f"❌ ОШИБКА ВЫПОЛНЕНИЯ (код {returncode})\n\n", True)
+        
+        # Выводим stdout, если есть
+        if stdout and stdout.strip():
+            # Удаляем лишние переносы строк в начале и конце
+            stdout = stdout.strip('\r\n')
+            self.append_stream("ВЫВОД КОМАНДЫ:\n", False)
+            self.append_stream("-" * 50 + "\n", False)
+            self.append_stream(stdout + "\n\n", False)
+        
+        # Выводим stderr, если есть
+        if stderr and stderr.strip():
+            # Удаляем лишние переносы строк в начале и конце
+            stderr = stderr.strip('\r\n')
+            self.append_stream("ОШИБКИ:\n", True)
+            self.append_stream("-" * 50 + "\n", True)
+            self.append_stream(stderr + "\n\n", True)
+        
+        # Добавляем завершающий разделитель
+        self.append_stream("=" * 50 + "\n", False)
+        
+        # Прокручиваем к началу вывода
+        cursor = self.result_text.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        self.result_text.setTextCursor(cursor)
+        
+        # Обновляем интерфейс
         self.progress_bar.setVisible(False)
         self.execute_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
-        if success:
-            self.set_status("Готово: выполнено успешно", is_success=True)
-        else:
-            self.set_status(f"Ошибка выполнения (код {returncode})", is_error=True)
+        
+        # Обновляем статус
+        status_msg = f"Готово: {command_name}" if success else f"Ошибка при выполнении: {command_name}"
+        self.set_status(status_msg, is_error=not success)
+        
+        # Обновляем статус
+        status_text = "Готово" if success else f"Ошибка (код {returncode})"
+        self.set_status(status_text, is_success=success, is_error=not success)
+        
+        # Убедимся, что окно видимо и активно
+        self.show()
+        self.activateWindow()
+        self.raise_()
+        
+        # Выводим в консоль для отладки
+        print("\n" + "=" * 50)
+        print(f"Команда завершена: {command_name}")
+        print(f"Код возврата: {returncode}")
+        if stderr:
+            print("\nSTDERR:")
+            print(stderr)
+        if stdout:
+            print("\nSTDOUT:")
+            print(stdout)
+        print("=" * 50 + "\n")
 
     def on_stream_progress(self, text, is_stderr):
         self.append_stream(text, is_stderr)
@@ -582,8 +646,8 @@ class SystemCheckApp(QMainWindow):
         if not s:
             return ""
         return (str(s).replace("&", "&amp;")
-                     .replace("<", "&lt;")
-                     .replace(">", "&gt;")
+                     .replace("<", "<")
+                     .replace(">", ">")
                      .replace("\n", "<br>"))
 
     def cancel_command(self):
@@ -625,10 +689,27 @@ class SystemCheckApp(QMainWindow):
         try:
             if not os.path.isdir(logs_dir):
                 os.makedirs(logs_dir, exist_ok=True)
+            # QDesktopServices.openUrl(QUrl.fromLocalFile(logs_dir)) # Альтернатива os.startfile
             os.startfile(logs_dir)
         except Exception as e:
             self.result_text.setPlainText(f"Не удалось открыть папку логов: {e}")
             self.set_status("Ошибка: не удалось открыть логи", is_error=True)
+
+    def elevate_and_restart(self):
+        try:
+            script = os.path.abspath(sys.argv[0])
+            params = f'"{script}"'
+            if len(sys.argv) > 1:
+                params += " " + " ".join(f'"{a}"' for a in sys.argv[1:])
+            # Запуск с правами администратора
+            rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
+            if rc <= 32:
+                raise RuntimeError(f"ShellExecuteW failed with code {rc}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка повышения прав", f"Не удалось перезапустить с правами администратора:\n{e}")
+            return
+        # Закрываем текущее приложение, новый экземпляр стартует с UAC
+        QApplication.quit()
 
     def closeEvent(self, event):
         # Сохраняем таймаут и избранное при выходе
@@ -663,7 +744,7 @@ class SystemCheckApp(QMainWindow):
             self.set_status(f"Ошибка сохранения: {e}", is_error=True)
 
     def set_status(self, message, is_error=False, is_success=False):
-        sb = self.statusBar()
+        sb = self.status_bar
         try:
             if is_error:
                 sb.setStyleSheet("QStatusBar { color: #d32f2f; }") # Красный цвет
@@ -676,23 +757,74 @@ class SystemCheckApp(QMainWindow):
             pass
 
 
-if __name__ == "__main__":
-    # Настройка логирования
-    logger = setup_logger()
-    
+def main():
     # Проверка прав администратора
     if not is_admin():
-        logger.warning("Приложение запущено без прав администратора. Некоторые функции могут быть недоступны.")
-        print("Предупреждение: Для некоторых проверок требуются права администратора.")
-    
+        print("Предупреждение: Приложение запущено без прав администратора. Некоторые функции могут быть недоступны.")
+
     try:
-        logger.info("Запуск приложения SystemCheckPy")
+        # Создаем приложение
         app = QApplication(sys.argv)
+        
+        # Создаем и настраиваем главное окно
         window = SystemCheckApp()
+        
+        # Устанавливаем позицию и размер
+        window.move(100, 100)
+        window.resize(1000, 700)
+        
+        # Показываем и активируем окно
         window.show()
-        logger.info("Главное окно отображено")
-        sys.exit(app.exec())
+        window.activateWindow()
+        window.raise_()
+        window.setFocus()
+        
+        # Даем время на инициализацию интерфейса
+        for _ in range(3):
+            app.processEvents()
+            QThread.msleep(100)
+        return app.exec()
+        
     except Exception as e:
-        logger.critical(f"Критическая ошибка при запуске приложения: {e}", exc_info=True)
-        QMessageBox.critical(None, "Ошибка", f"Произошла критическая ошибка:\n{str(e)}\n\nПроверьте логи для подробностей.")
+        import traceback
+        error_msg = f"Произошла критическая ошибка при запуске приложения:\n{str(e)}\n\nТрассировка:\n{traceback.format_exc()}"
+        print(error_msg, file=sys.stderr)
+        
+        # Пытаемся показать сообщение об ошибке в GUI, если это возможно
+        try:
+            error_box = QMessageBox()
+            error_box.setIcon(QMessageBox.Critical)
+            error_box.setWindowTitle("Ошибка запуска")
+            error_box.setText("Не удалось запустить приложение")
+            error_box.setDetailedText(error_msg)
+            error_box.exec()
+        except:
+            pass
+            
+        return 1
+
+if __name__ == "__main__":
+    # Create a simple test window first
+    app = QApplication(sys.argv)
+    
+    # Create a simple window
+    test_window = QMainWindow()
+    test_window.setWindowTitle("Test Window")
+    test_window.setGeometry(100, 100, 800, 600)
+    
+    # Add a label to the window
+    label = QLabel("If you can see this, the window is working!", test_window)
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    test_window.setCentralWidget(label)
+    
+    # Show the window
+    test_window.show()
+    
+    # If the test window works, try the main application
+    if test_window.isVisible():
+        test_window.close()
+        sys.exit(main())
+    else:
+        # If test window doesn't show, show error
+        QMessageBox.critical(None, "Ошибка", "Не удалось отобразить тестовое окно. Возможно, проблема с графической подсистемой.")
         sys.exit(1)
